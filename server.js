@@ -4,7 +4,18 @@ import fs from 'node:fs';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const INPUT_CSV_PATH = '/data/in/tables/01km5ky89sdjsrgz7t55kv60t3.csv';
+const DATASETS = [
+  {
+    key: 'artist_leaderboard',
+    label: 'Artist leaderboard',
+    path: '/data/in/tables/artist_leaderboard.csv',
+  },
+  {
+    key: 'monthly_listening_trends',
+    label: 'Monthly listening trends',
+    path: '/data/in/tables/monthly_listening_trends.csv',
+  },
+];
 const LIMIT_ROWS = 5; // for testing
 
 function parseCsvSimple(csvText) {
@@ -67,7 +78,11 @@ function pickBestNumericColumn(headers, rows) {
 
 app.all('/', (req, res) => {
   try {
-    const csvText = fs.readFileSync(INPUT_CSV_PATH, 'utf8');
+    const requestedKey = typeof req.query.dataset === 'string' ? req.query.dataset : DATASETS[0].key;
+    const dataset = DATASETS.find((d) => d.key === requestedKey) || DATASETS[0];
+    const filePath = dataset.path;
+
+    const csvText = fs.readFileSync(filePath, 'utf8');
     const { headers, rows } = parseCsvSimple(csvText);
     const limitedRows = rows.slice(0, LIMIT_ROWS);
 
@@ -172,7 +187,22 @@ app.all('/', (req, res) => {
         <body>
           <div class="card">
             <h2 style="margin:0 0 10px 0;">Input mapping preview</h2>
-            <div style="color:#6b7280;margin-bottom:12px;">Reading from <code>${escapeHtml(INPUT_CSV_PATH)}</code></div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;">
+              <div style="color:#6b7280;">
+                Reading from <code>${escapeHtml(filePath)}</code>
+              </div>
+            </div>
+
+            <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
+              ${DATASETS.map((d) => {
+                const active = d.key === dataset.key;
+                return `<a href="/?dataset=${encodeURIComponent(d.key)}" style="text-decoration:none;display:inline-block;padding:8px 10px;border:1px solid ${
+                  active ? '#2563eb' : '#e5e7eb'
+                };border-radius:10px;background:${active ? '#eff6ff' : '#fff'};color:${active ? '#1d4ed8' : '#111827'};font-weight:${
+                  active ? '600' : '500'
+                };">${escapeHtml(d.label)}</a>`;
+              }).join('')}
+            </div>
 
             <div style="color:#374151;margin-bottom:10px;">
               Showing top <b>${LIMIT_ROWS}</b> rows.
@@ -194,7 +224,10 @@ app.all('/', (req, res) => {
     res.set('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
   } catch (err) {
-    res.status(500).type('text/plain').send(`Error reading CSV: ${err?.message || String(err)} (file: ${INPUT_CSV_PATH})`);
+    res
+      .status(500)
+      .type('text/plain')
+      .send(`Error reading CSV: ${err?.message || String(err)} (file: ${DATASETS[0]?.path || 'unknown'})`);
   }
 }); // app.all handles both GET and POST
 
