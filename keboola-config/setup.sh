@@ -1,3 +1,3 @@
 #!/bin/bash
 set -Eeuo pipefail
-cd /app && npm install
+cd /keboola-app && npm install
