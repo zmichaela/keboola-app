@@ -560,7 +560,8 @@ function renderArtistChart({ headers, rows, chartKey, topN, skipMinPct }) {
     .slice(0, Math.max(1, Math.min(topN, rows.length)));
 
   const chartW = 900;
-  const chartH = 360;
+  const barChartN = parsed.length || 1;
+  const chartH = chartKey === 'top_hours_bar' ? Math.min(980, 120 + barChartN * 18) : 360;
   const padLeft = 200;
   const padRight = 24;
   const padTop = 26;
@@ -571,14 +572,13 @@ function renderArtistChart({ headers, rows, chartKey, topN, skipMinPct }) {
   if (chartKey === 'top_hours_bar') {
     const maxVal = parsed.reduce((m, v) => Math.max(m, v.hours ?? 0), 0) || 1;
     const n = Math.max(1, parsed.length);
-    const minBarH = 8;
-    // Add some gap between bars, but keep the layout within the SVG height.
-    // When n is large (e.g., 50), the gap collapses automatically.
-    let barGap = 6;
+    const minBarH = 10;
+    // Add vertical spacing, but auto-shrink for very large N.
+    let barGap = 8;
     const remainingForGap = innerH - n * minBarH;
-    if (remainingForGap < 0) barGap = 0;
-    else barGap = Math.min(6, Math.floor(remainingForGap / Math.max(1, n - 1)));
-    const barH = Math.max(4, Math.floor((innerH - barGap * (n - 1)) / n));
+    if (remainingForGap < 0) barGap = 2;
+    else barGap = Math.min(10, Math.floor(remainingForGap / Math.max(1, n - 1)));
+    const barH = Math.max(minBarH, Math.floor((innerH - barGap * (n - 1)) / n));
 
     const bars = parsed
       .map((t, i) => {
@@ -586,24 +586,35 @@ function renderArtistChart({ headers, rows, chartKey, topN, skipMinPct }) {
         const w = innerW * ((t.hours ?? 0) / maxVal);
         const y = padTop + i * (barH + barGap);
         const h = barH;
+        const label = formatShortNumber(t.hours);
+        const labelShort = String(t.name).length > 22 ? `${String(t.name).slice(0, 22)}…` : String(t.name);
+        const showInside = w >= 120;
+        const textX = showInside ? x + w - 8 : x + 8;
+        const textAnchor = showInside ? 'end' : 'start';
         const c = colorForKey(t.name);
         return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${c}">
           <title>${escapeHtml(t.name)} • ${formatShortNumber(t.hours)} hours</title>
         </rect>
         <text x="${padLeft - 10}" y="${y + h / 2 + 4}" font-size="12" fill="#111827" text-anchor="end">${escapeHtml(
-          String(t.name).length > 22 ? `${String(t.name).slice(0, 22)}…` : String(t.name),
+          labelShort,
+        )}</text>
+        <text x="${textX}" y="${y + h / 2 + 4}" font-size="12" fill="#111827" text-anchor="${textAnchor}">${escapeHtml(
+          label,
         )}</text>`;
       })
       .join('');
 
     const axisRight = padLeft + innerW;
+    const wrapStyle = chartH > 520 ? 'style="max-height:520px;overflow:auto;"' : '';
     return `
       <div style="margin-top:16px;">
         <h3 style="margin:0 0 10px 0;font-size:16px;">Horizontal Bar: TOTAL_HOURS</h3>
-        <svg viewBox="0 0 ${chartW} ${chartH}" width="100%" height="auto" role="img">
-          <line x1="${padLeft}" x2="${axisRight}" y1="${chartH - padBottom}" y2="${chartH - padBottom}" stroke="#e5e7eb" />
-          ${bars}
-        </svg>
+        <div ${wrapStyle}>
+          <svg viewBox="0 0 ${chartW} ${chartH}" width="100%" height="auto" role="img">
+            <line x1="${padLeft}" x2="${axisRight}" y1="${chartH - padBottom}" y2="${chartH - padBottom}" stroke="#e5e7eb" />
+            ${bars}
+          </svg>
+        </div>
       </div>
     `;
   }
@@ -682,9 +693,9 @@ app.all('/', (req, res) => {
     const requestedDatasetKey = typeof req.query.dataset === 'string' ? req.query.dataset : DATASETS[0].key;
     const dataset = DATASETS.find((d) => d.key === requestedDatasetKey) || DATASETS[0];
 
-    // Monthly filters (index-based).
-    const monthLow = Number.isFinite(Number(req.query.monthLow)) ? Number(req.query.monthLow) : 0;
-    const monthHigh = Number.isFinite(Number(req.query.monthHigh)) ? Number(req.query.monthHigh) : 9999;
+    // Monthly filters (index-based). If not provided, default to the most recent ~24 months.
+    let monthLow = Number.isFinite(Number(req.query.monthLow)) ? Number(req.query.monthLow) : null;
+    let monthHigh = Number.isFinite(Number(req.query.monthHigh)) ? Number(req.query.monthHigh) : null;
 
     // Artist filters.
     const topN = Number.isFinite(Number(req.query.topN)) ? Number(req.query.topN) : 50;
@@ -693,6 +704,14 @@ app.all('/', (req, res) => {
 
     const csvText = fs.readFileSync(dataset.path, 'utf8');
     const { headers, rows } = parseCsv(csvText);
+
+    if (dataset.key === 'monthly_listening_trends' && (monthLow === null || monthHigh === null)) {
+      const n = rows.length;
+      monthLow = Math.max(0, n - 24);
+      monthHigh = n - 1;
+    }
+    if (monthLow === null) monthLow = 0;
+    if (monthHigh === null) monthHigh = 9999;
 
     let chartKey = '';
     if (dataset.key === 'monthly_listening_trends') {
@@ -794,10 +813,43 @@ app.all('/', (req, res) => {
     // Table preview: first 8 rows of filtered set (for readability).
     const previewHtml = (() => {
       const tableHeaders = headers.slice(0, 10);
-      const previewRows =
-        dataset.key === 'monthly_listening_trends'
-          ? rows.slice(0, 8)
-          : rows.slice(0, 8);
+      const PREVIEW_ROWS = 8;
+
+      let previewRows = [];
+      if (dataset.key === 'monthly_listening_trends') {
+        const idxMonth = findColumnIndex(headers, ['MONTH']);
+        const sorted = rows
+          .map((r) => ({ monthTime: parseMonthToTime(getCell(r, idxMonth)), r }))
+          .sort((a, b) => {
+            if (a.monthTime !== null && b.monthTime !== null) return a.monthTime - b.monthTime;
+            if (a.monthTime !== null) return -1;
+            if (b.monthTime !== null) return 1;
+            return 0;
+          })
+          .map((x) => x.r);
+        const from = Math.max(0, Math.min(sorted.length - 1, monthLow));
+        const to = Math.max(from, Math.min(sorted.length - 1, monthHigh));
+        previewRows = sorted.slice(from, Math.min(to + 1, from + PREVIEW_ROWS));
+      } else {
+        const idxName = findColumnIndex(headers, ['artist_name', 'ARTIST_NAME', 'artist']);
+        const idxHours = findColumnIndex(headers, ['TOTAL_HOURS']);
+        const idxSkip = findColumnIndex(headers, ['SKIP_RATE_PCT', 'SKIP_PCT', 'SKIP_RATE']);
+
+        const parsed = rows
+          .map((r) => ({
+            name: getCell(r, idxName),
+            hours: parseNumeric(getCell(r, idxHours)),
+            skipPct: idxSkip >= 0 ? parseNumeric(getCell(r, idxSkip)) : null,
+            r,
+          }))
+          .filter((x) => x.name !== undefined && x.hours !== null)
+          .filter((x) => (skipMinPct !== null && x.skipPct !== null ? x.skipPct >= skipMinPct : true))
+          .sort((a, b) => (b.hours ?? 0) - (a.hours ?? 0))
+          .slice(0, Math.max(1, topN));
+
+        previewRows = parsed.slice(0, PREVIEW_ROWS).map((x) => x.r);
+      }
+
       const th = tableHeaders.map((h) => `<th>${escapeHtml(h)}</th>`).join('');
       const tr = previewRows
         .map((r) => `<tr>${tableHeaders.map((_, i) => `<td>${escapeHtml(r[i])}</td>`).join('')}</tr>`)
