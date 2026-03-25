@@ -570,14 +570,22 @@ function renderArtistChart({ headers, rows, chartKey, topN, skipMinPct }) {
 
   if (chartKey === 'top_hours_bar') {
     const maxVal = parsed.reduce((m, v) => Math.max(m, v.hours ?? 0), 0) || 1;
-    const barH = innerH / Math.max(1, parsed.length);
+    const n = Math.max(1, parsed.length);
+    const minBarH = 8;
+    // Add some gap between bars, but keep the layout within the SVG height.
+    // When n is large (e.g., 50), the gap collapses automatically.
+    let barGap = 6;
+    const remainingForGap = innerH - n * minBarH;
+    if (remainingForGap < 0) barGap = 0;
+    else barGap = Math.min(6, Math.floor(remainingForGap / Math.max(1, n - 1)));
+    const barH = Math.max(4, Math.floor((innerH - barGap * (n - 1)) / n));
 
     const bars = parsed
       .map((t, i) => {
         const x = padLeft;
         const w = innerW * ((t.hours ?? 0) / maxVal);
-        const y = padTop + i * barH + 8;
-        const h = Math.max(12, barH - 16);
+        const y = padTop + i * (barH + barGap);
+        const h = barH;
         const c = colorForKey(t.name);
         return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${c}">
           <title>${escapeHtml(t.name)} • ${formatShortNumber(t.hours)} hours</title>
